@@ -703,4 +703,25 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
         target_compile_options(${GGML_CPU_NAME} PRIVATE "-fno-associative-math")
     endif()
+
+    if (GGML_ZIG)
+        find_program(ZIG_EXECUTABLE zig REQUIRED)
+
+        set(ZIG_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../zig")
+        set(ZIG_LIB_DIR "${CMAKE_BINARY_DIR}/zig-out/lib")
+        set(ZIG_LIB "${ZIG_LIB_DIR}/libllama_zig.a")
+
+        add_custom_command(
+            OUTPUT ${ZIG_LIB}
+            COMMAND ${ZIG_EXECUTABLE} build -Doptimize=ReleaseFast --prefix ${CMAKE_BINARY_DIR}/zig-out
+            WORKING_DIRECTORY ${ZIG_SRC_DIR}
+            DEPENDS ${ZIG_SRC_DIR}/src/ggml-cpu/quants.zig ${ZIG_SRC_DIR}/src/ggml-cpu/repack.zig ${ZIG_SRC_DIR}/src/ggml-cpu/ggml-common.zig ${ZIG_SRC_DIR}/build.zig
+            COMMENT "Building Zig components"
+        )
+        add_custom_target(${GGML_CPU_NAME}_zig DEPENDS ${ZIG_LIB})
+
+        add_dependencies(${GGML_CPU_NAME} ${GGML_CPU_NAME}_zig)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_ZIG)
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE ${ZIG_LIB})
+    endif()
 endfunction()

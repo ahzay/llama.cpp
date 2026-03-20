@@ -204,6 +204,10 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
+#ifdef GGML_USE_ZIG
+extern void zig_vec_dot_q4_K_q8_K(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
+#endif
+
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
@@ -290,9 +294,13 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_Q4_K] = {
         .from_float               = quantize_row_q4_K,
+#ifdef GGML_USE_ZIG
+        .vec_dot                  = zig_vec_dot_q4_K_q8_K,
+#else
         .vec_dot                  = ggml_vec_dot_q4_K_q8_K,
+#endif
         .vec_dot_type             = GGML_TYPE_Q8_K,
-#if defined (__ARM_FEATURE_MATMUL_INT8)
+#if defined (__ARM_FEATURE_MATMUL_INT8) && !defined(GGML_USE_ZIG)
         .nrows                    = 2,
 #else
         .nrows                    = 1,
