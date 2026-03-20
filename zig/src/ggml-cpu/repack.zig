@@ -50,30 +50,20 @@ pub export fn zig_gemm_q4_K_8x8_q8_K(
                     for (0..4) |m| {
                         const q8_base = (k >> 2) * 256 + (k % 4) * 4 * BLOCKLEN + m * BLOCKLEN;
 
-                        // Pack lo/hi q8 into 16 for wider SIMD
-                        var q8_16: [16]i8 = undefined;
-                        @memcpy(q8_16[0..8], a_row[l].qs[q8_base..][0..8]);
-                        @memcpy(q8_16[8..16], a_row[l].qs[q8_base + 128 ..][0..8]);
-                        const q8v: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8_16));
+                        // Load q8 lo and hi as separate 8-wide vectors
+                        const q8_lo: @Vector(BLOCKLEN, i32) = @intCast(@as(@Vector(BLOCKLEN, i8), a_row[l].qs[q8_base..][0..BLOCKLEN].*));
+                        const q8_hi: @Vector(BLOCKLEN, i32) = @intCast(@as(@Vector(BLOCKLEN, i8), a_row[l].qs[q8_base + 128 ..][0..BLOCKLEN].*));
 
                         inline for (0..NCOLS) |j| {
                             const qs_base = k * NCOLS * BLOCKLEN + j * BLOCKLEN;
-                            const raw: @Vector(8, u8) = b_col[l].qs[qs_base..][0..8].*;
-                            const lo: @Vector(8, i8) = @bitCast(raw & @as(@Vector(8, u8), @splat(0x0F)));
-                            const hi: @Vector(8, i8) = @bitCast(raw >> @as(@Vector(8, u8), @splat(4)));
+                            const raw: @Vector(BLOCKLEN, u8) = b_col[l].qs[qs_base..][0..BLOCKLEN].*;
+                            const v0: @Vector(BLOCKLEN, i32) = @intCast(@as(@Vector(BLOCKLEN, i8), @bitCast(raw & @as(@Vector(BLOCKLEN, u8), @splat(0x0F)))));
+                            const v1: @Vector(BLOCKLEN, i32) = @intCast(@as(@Vector(BLOCKLEN, i8), @bitCast(raw >> @as(@Vector(BLOCKLEN, u8), @splat(4)))));
 
-                            var q4_16: [16]i8 = undefined;
-                            q4_16[0..8].* = lo;
-                            q4_16[8..16].* = hi;
-                            const q4v: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q4_16));
-
-                            const prod = q4v * q8v;
-                            const lo_half = @shuffle(i32, prod, undefined, [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 });
-                            const hi_half = @shuffle(i32, prod, undefined, [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 });
-                            const dot_lo = @reduce(.Add, lo_half);
-                            const dot_hi = @reduce(.Add, hi_half);
-
+                            const dot_lo = @reduce(.Add, v0 * q8_lo);
+                            const dot_hi = @reduce(.Add, v1 * q8_hi);
                             const sumi = dot_lo * @as(i32, sc0[j]) + dot_hi * @as(i32, sc1[j]);
+
                             sumf[m][j] += @as(f32, @floatFromInt(sumi)) * T.f16f32(b_col[l].d[j]) * a_row[l].d[m];
                         }
                     }
