@@ -102,6 +102,7 @@ pub export fn zig_gemm_q4_K_8x8_q8_K(
 
 //  Tests
 
+extern fn ggml_cpu_init() void;
 extern fn ggml_gemm_q4_K_8x8_q8_K_generic(n: c_int, s: [*]f32, bs: usize, vx: *const anyopaque, vy: *const anyopaque, nr: c_int, nc: c_int) void;
 extern fn ggml_gemm_q4_K_8x8_q8_K(n: c_int, s: [*]f32, bs: usize, vx: *const anyopaque, vy: *const anyopaque, nr: c_int, nc: c_int) void;
 
@@ -116,6 +117,7 @@ fn fillRandBytes(buf: []u8, rand: std.Random) void {
 }
 
 test "q4_K gemm: parity + bench" {
+    ggml_cpu_init();
     var prng = std.Random.DefaultPrng.init(0xFACE_CAFE);
     const rand = prng.random();
     const alloc = std.heap.page_allocator;

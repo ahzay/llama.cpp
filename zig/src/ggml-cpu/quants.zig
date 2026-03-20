@@ -70,6 +70,7 @@ pub export fn zig_vec_dot_q4_K_q8_K(
 
 //  Tests
 
+extern fn ggml_cpu_init() void;
 extern fn ggml_vec_dot_q4_K_q8_K(n: c_int, s: *f32, bs: usize, vx: *const anyopaque, bx: usize, vy: *const anyopaque, by: usize, nrc: c_int) void;
 extern fn ggml_vec_dot_q4_K_q8_K_generic(n: c_int, s: *f32, bs: usize, vx: *const anyopaque, bx: usize, vy: *const anyopaque, by: usize, nrc: c_int) void;
 
@@ -94,6 +95,7 @@ fn timeCall(comptime f: anytype, n: c_int, vx: *const anyopaque, vy: *const anyo
 }
 
 test "q4_K vec_dot: parity + bench" {
+    ggml_cpu_init();
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
     const rand = prng.random();
     const alloc = std.heap.page_allocator;
