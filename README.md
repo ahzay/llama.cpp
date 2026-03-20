@@ -1,13 +1,16 @@
 # llama.cpp.zig
 
-This fork incrementally replaces C/C++ components with portable Zig, aiming for performance parity with hand-tuned architecture-specific code. Zig's `@Vector` types compile through LLVM to the same SIMD instructions (NEON, AVX2, etc.) without inline assembly or arch-specific intrinsics. Replacements are transparent to the rest of the codebase as it calls the Zig code directly.
+This fork incrementally replaces C/C++ components with portable Zig, aiming for performance parity with hand-tuned architecture-specific code. Replacements are transparent to the rest of the codebase as it calls the Zig code directly.
 
-**Current replacements** (Qwen3.5-2B, Apple M4 Max, pp2048/tg128, zig/vanilla t/s):
+Each Zig function replaces ~7 architecture-specific C implementations (ARM NEON, x86 AVX2/AVX512, RISC-V, WASM, s390, LoongArch, PowerPC) with a single function, letting LLVM do the heavy lifting.
 
-| Function | Quant | pp | tg | status |
+**Current replacements** (Qwen3.5-2B, pp2048/tg128, zig / vanilla t/s):
+
+| Function | Quant | pp | tg | Platform |
 |---|---|---|---|---|
-| `vec_dot` | Q4_K | 614 / 644 | 130 / 136 | parity |
-| `vec_dot` | Q4_0 | 664 / 767 | 147 / 140 | parity |
+| `vec_dot` | Q4_K | 614 / 644 | 130 / 136 | Apple M4 Max |
+| `vec_dot` | Q4_0 | 664 / 767 | 147 / 140 | Apple M4 Max |
+| `vec_dot` | Q4_K | 246 / 246 | 12.6 / 12.6 | AMD 5900X (AVX2) |
 
 ```
 cmake -DGGML_ZIG=ON ..    # enable zig components
