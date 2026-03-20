@@ -27,7 +27,6 @@ pub fn build(b: *std.Build) void {
     // Helper to add a test for a source file
     const sources = .{
         .{ "quants", "src/ggml-cpu/quants.zig" },
-        .{ "repack", "src/ggml-cpu/repack.zig" },
     };
 
     const test_step = b.step("test", "Run parity tests + benchmarks");

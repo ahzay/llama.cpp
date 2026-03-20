@@ -715,7 +715,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             OUTPUT ${ZIG_LIB}
             COMMAND ${ZIG_EXECUTABLE} build -Doptimize=ReleaseFast --prefix ${CMAKE_BINARY_DIR}/zig-out
             WORKING_DIRECTORY ${ZIG_SRC_DIR}
-            DEPENDS ${ZIG_SRC_DIR}/src/ggml-cpu/quants.zig ${ZIG_SRC_DIR}/src/ggml-cpu/repack.zig ${ZIG_SRC_DIR}/src/ggml-cpu/ggml-common.zig ${ZIG_SRC_DIR}/build.zig
+            DEPENDS ${ZIG_SRC_DIR}/src/ggml-cpu/quants.zig ${ZIG_SRC_DIR}/src/ggml-cpu/ggml-common.zig ${ZIG_SRC_DIR}/build.zig
             COMMENT "Building Zig components"
         )
         add_custom_target(${GGML_CPU_NAME}_zig DEPENDS ${ZIG_LIB})

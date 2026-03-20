@@ -4084,16 +4084,8 @@ template <> void gemm<block_q4_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t
     ggml_gemm_q4_K_8x4_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-#ifdef GGML_USE_ZIG
-extern "C" void zig_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
-#endif
-
 template <> void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
-#ifdef GGML_USE_ZIG
-    zig_gemm_q4_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
-#else
     ggml_gemm_q4_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
-#endif
 }
 
 template <> void gemm<block_q5_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {

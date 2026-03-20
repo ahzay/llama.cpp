@@ -68,89 +68,195 @@ pub export fn zig_vec_dot_q4_K_q8_K(
     s.* = sumf;
 }
 
-//  Tests
+pub export fn zig_vec_dot_q4_0_q8_0(
+    n: c_int,
+    s: *f32,
+    bs: usize,
+    vx: *const anyopaque,
+    bx: usize,
+    vy: *const anyopaque,
+    by: usize,
+    nrc: c_int,
+) void {
+    _ = bs;
+    _ = bx;
+    _ = by;
+    _ = nrc;
 
-extern fn ggml_cpu_init() void;
-extern fn ggml_vec_dot_q4_K_q8_K(n: c_int, s: *f32, bs: usize, vx: *const anyopaque, bx: usize, vy: *const anyopaque, by: usize, nrc: c_int) void;
-extern fn ggml_vec_dot_q4_K_q8_K_generic(n: c_int, s: *f32, bs: usize, vx: *const anyopaque, bx: usize, vy: *const anyopaque, by: usize, nrc: c_int) void;
+    const nb: usize = @intCast(@divExact(n, T.QK8_0));
+    const xp: [*]const T.block_q4_0 = @ptrCast(@alignCast(vx));
+    const yp: [*]const T.block_q8_0 = @ptrCast(@alignCast(vy));
 
-fn fmtNs(ns: u64) struct { v: f64, u: []const u8 } {
-    return if (ns >= 1_000_000) .{ .v = @as(f64, @floatFromInt(ns)) / 1e6, .u = "ms" } else if (ns >= 1_000) .{ .v = @as(f64, @floatFromInt(ns)) / 1e3, .u = "us" } else .{ .v = @as(f64, @floatFromInt(ns)), .u = "ns" };
+    var sumf: f32 = 0;
+
+    for (0..nb) |i| {
+        const raw: @Vector(16, u8) = xp[i].qs;
+        var aux: [32]u8 = undefined;
+        aux[0..16].* = @as([16]u8, raw & @as(@Vector(16, u8), @splat(0x0F)));
+        aux[16..32].* = @as([16]u8, raw >> @as(@Vector(16, u8), @splat(4)));
+
+        const q4: @Vector(32, i32) = @intCast(@as(@Vector(32, u8), aux));
+        const q8: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
+        const sumi = @reduce(.Add, q4 * q8) - 8 * @reduce(.Add, q8);
+
+        sumf += @as(f32, @floatFromInt(sumi)) * T.f16f32(xp[i].d) * T.f16f32(yp[i].d);
+    }
+
+    s.* = sumf;
 }
 
-var bench_sink: f32 = 0;
+// ── Test infrastructure ──
 
-fn timeCall(comptime f: anytype, n: c_int, vx: *const anyopaque, vy: *const anyopaque) u64 {
-    var result: f32 = 0;
-    for (0..50) |_| f(n, &result, 0, vx, 0, vy, 0, 1);
+const VecDotFn = *const fn (c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) callconv(.c) void;
+
+fn benchmark(comptime f: VecDotFn, n: c_int, vx: *const anyopaque, vy: *const anyopaque) u64 {
+    var r: f32 = 0;
+    for (0..50) |_| f(n, &r, 0, vx, 0, vy, 0, 1);
     var t: [500]u64 = undefined;
     for (0..500) |i| {
         var timer = std.time.Timer.start() catch unreachable;
-        f(n, &result, 0, vx, 0, vy, 0, 1);
+        f(n, &r, 0, vx, 0, vy, 0, 1);
         t[i] = timer.read();
     }
-    bench_sink += result;
+    sink += r;
     std.mem.sortUnstable(u64, &t, {}, std.sort.asc(u64));
     return t[250];
 }
 
-test "q4_K vec_dot: parity + bench" {
+var sink: f32 = 0;
+
+const FmtResult = struct { v: f64, u: []const u8 };
+
+fn fmtNs(ns: u64) FmtResult {
+    return if (ns >= 1_000_000)
+        .{ .v = @as(f64, @floatFromInt(ns)) / 1e6, .u = "ms" }
+    else if (ns >= 1_000)
+        .{ .v = @as(f64, @floatFromInt(ns)) / 1e3, .u = "us" }
+    else
+        .{ .v = @as(f64, @floatFromInt(ns)), .u = "ns" };
+}
+
+fn checkParity(comptime zig_fn: VecDotFn, comptime ref_fn: VecDotFn, n: c_int, vx: *const anyopaque, vy: *const anyopaque) !void {
+    var zig_r: f32 = 0;
+    var ref_r: f32 = 0;
+    zig_fn(n, &zig_r, 0, vx, 0, vy, 0, 1);
+    ref_fn(n, &ref_r, 0, vx, 0, vy, 0, 1);
+    if (@abs(zig_r - ref_r) / @max(@abs(ref_r), 1e-6) > 1e-3)
+        return error.TestExpectedEqual;
+}
+
+fn printBench(label: []const u8, n: usize, comptime fns: anytype, vx: *const anyopaque, vy: *const anyopaque) void {
+    const ci: c_int = @intCast(n);
+    var vals: [fns.len]FmtResult = undefined;
+    inline for (fns, 0..) |entry, i| vals[i] = fmtNs(benchmark(entry[1], ci, vx, vy));
+    std.debug.print("n={d:<8}", .{n});
+    inline for (0..fns.len) |i| std.debug.print(" {d:>7.2} {s}", .{ vals[i].v, vals[i].u });
+    std.debug.print(" {s}\n", .{label});
+}
+
+extern fn ggml_cpu_init() void;
+
+// ── Q4_K tests ──
+
+extern fn ggml_vec_dot_q4_K_q8_K(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+extern fn ggml_vec_dot_q4_K_q8_K_generic(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+
+test "q4_K vec_dot" {
     ggml_cpu_init();
     var prng = std.Random.DefaultPrng.init(0xDEAD_BEEF);
     const rand = prng.random();
-    const alloc = std.heap.page_allocator;
+    const a = std.heap.page_allocator;
 
     for ([_]usize{ 1, 4, 16, 64, 256 }) |nb| {
-        const xb = try alloc.alloc(T.block_q4_K, nb);
-        const yb = try alloc.alloc(T.block_q8_K, nb);
-        defer alloc.free(xb);
-        defer alloc.free(yb);
-
-        for (xb) |*blk| {
-            blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
-            blk.dmin = @bitCast(@as(f16, @floatCast(rand.float(f32) * 0.5)));
-            for (&blk.scales) |*v| v.* = rand.intRangeAtMost(u8, 0, 63);
-            for (&blk.qs) |*v| v.* = rand.int(u8);
-        }
-        for (yb) |*blk| {
-            blk.d = (rand.float(f32) - 0.5) * 2.0;
-            for (&blk.qs) |*v| v.* = @as(i8, @intCast(@as(i32, rand.intRangeAtMost(u8, 0, 255)) - 128));
-            for (&blk.bsums) |*v| v.* = @as(i16, @intCast(@as(i32, rand.intRangeAtMost(u16, 0, 65535)) - 32768));
-        }
-
-        const n: c_int = @intCast(nb * T.QK_K);
-        var zig_r: f32 = 0;
-        var ref_r: f32 = 0;
-        zig_vec_dot_q4_K_q8_K(n, &zig_r, 0, @ptrCast(xb.ptr), 0, @ptrCast(yb.ptr), 0, 1);
-        ggml_vec_dot_q4_K_q8_K_generic(n, &ref_r, 0, @ptrCast(xb.ptr), 0, @ptrCast(yb.ptr), 0, 1);
-
-        if (@abs(zig_r - ref_r) / @max(@abs(ref_r), 1e-6) > 1e-3) {
-            std.debug.print("MISMATCH nb={}: zig={d:.6} ref={d:.6}\n", .{ nb, zig_r, ref_r });
-            return error.TestExpectedEqual;
-        }
+        const x = try a.alloc(T.block_q4_K, nb);
+        const y = try a.alloc(T.block_q8_K, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ4K(x, rand);
+        fillQ8K(y, rand);
+        try checkParity(zig_vec_dot_q4_K_q8_K, ggml_vec_dot_q4_K_q8_K_generic, @intCast(nb * T.QK_K), @ptrCast(x.ptr), @ptrCast(y.ptr));
     }
 
-    std.debug.print("\n{s:<12} {s:>10} {s:>10} {s:>10}\n", .{ "", "zig", "generic", "neon" });
+    std.debug.print("\nq4_K:        {s:>10} {s:>10} {s:>10}\n", .{ "zig", "generic", "neon" });
     for ([_]usize{ 16, 64, 256, 1024 }) |nb| {
-        const xb = try alloc.alloc(T.block_q4_K, nb);
-        const yb = try alloc.alloc(T.block_q8_K, nb);
-        defer alloc.free(xb);
-        defer alloc.free(yb);
-        for (xb) |*blk| {
-            blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
-            blk.dmin = @bitCast(@as(f16, @floatCast(rand.float(f32) * 0.5)));
-            for (&blk.scales) |*v| v.* = rand.intRangeAtMost(u8, 0, 63);
-            for (&blk.qs) |*v| v.* = rand.int(u8);
-        }
-        for (yb) |*blk| {
-            blk.d = (rand.float(f32) - 0.5) * 2.0;
-            for (&blk.qs) |*v| v.* = @as(i8, @intCast(@as(i32, rand.intRangeAtMost(u8, 0, 255)) - 128));
-            for (&blk.bsums) |*v| v.* = @as(i16, @intCast(@as(i32, rand.intRangeAtMost(u16, 0, 65535)) - 32768));
-        }
-        const n: c_int = @intCast(nb * T.QK_K);
-        const zt = fmtNs(timeCall(zig_vec_dot_q4_K_q8_K, n, @ptrCast(xb.ptr), @ptrCast(yb.ptr)));
-        const gt = fmtNs(timeCall(ggml_vec_dot_q4_K_q8_K_generic, n, @ptrCast(xb.ptr), @ptrCast(yb.ptr)));
-        const nt = fmtNs(timeCall(ggml_vec_dot_q4_K_q8_K, n, @ptrCast(xb.ptr), @ptrCast(yb.ptr)));
-        std.debug.print("n={d:<8} {d:>7.2} {s} {d:>7.2} {s} {d:>7.2} {s}\n", .{ nb * T.QK_K, zt.v, zt.u, gt.v, gt.u, nt.v, nt.u });
+        const x = try a.alloc(T.block_q4_K, nb);
+        const y = try a.alloc(T.block_q8_K, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ4K(x, rand);
+        fillQ8K(y, rand);
+        printBench("", nb * T.QK_K, .{
+            .{ "zig", zig_vec_dot_q4_K_q8_K },
+            .{ "generic", ggml_vec_dot_q4_K_q8_K_generic },
+            .{ "neon", ggml_vec_dot_q4_K_q8_K },
+        }, @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+}
+
+fn fillQ4K(xb: []T.block_q4_K, rand: std.Random) void {
+    for (xb) |*blk| {
+        blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
+        blk.dmin = @bitCast(@as(f16, @floatCast(rand.float(f32) * 0.5)));
+        for (&blk.scales) |*v| v.* = rand.intRangeAtMost(u8, 0, 63);
+        for (&blk.qs) |*v| v.* = rand.int(u8);
+    }
+}
+
+fn fillQ8K(yb: []T.block_q8_K, rand: std.Random) void {
+    for (yb) |*blk| {
+        blk.d = (rand.float(f32) - 0.5) * 2.0;
+        for (&blk.qs) |*v| v.* = @as(i8, @intCast(@as(i32, rand.intRangeAtMost(u8, 0, 255)) - 128));
+        for (&blk.bsums) |*v| v.* = @as(i16, @intCast(@as(i32, rand.intRangeAtMost(u16, 0, 65535)) - 32768));
+    }
+}
+
+// ── Q4_0 tests ──
+
+extern fn ggml_vec_dot_q4_0_q8_0(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+extern fn ggml_vec_dot_q4_0_q8_0_generic(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+
+test "q4_0 vec_dot" {
+    ggml_cpu_init();
+    var prng = std.Random.DefaultPrng.init(0xCAFE_BABE);
+    const rand = prng.random();
+    const a = std.heap.page_allocator;
+
+    for ([_]usize{ 1, 4, 16, 64, 256 }) |nb| {
+        const x = try a.alloc(T.block_q4_0, nb);
+        const y = try a.alloc(T.block_q8_0, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ4_0(x, rand);
+        fillQ8_0(y, rand);
+        try checkParity(zig_vec_dot_q4_0_q8_0, ggml_vec_dot_q4_0_q8_0_generic, @intCast(nb * T.QK4_0), @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+
+    std.debug.print("\nq4_0:        {s:>10} {s:>10} {s:>10}\n", .{ "zig", "generic", "neon" });
+    for ([_]usize{ 16, 64, 256, 1024 }) |nb| {
+        const x = try a.alloc(T.block_q4_0, nb);
+        const y = try a.alloc(T.block_q8_0, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ4_0(x, rand);
+        fillQ8_0(y, rand);
+        printBench("", nb * T.QK4_0, .{
+            .{ "zig", zig_vec_dot_q4_0_q8_0 },
+            .{ "generic", ggml_vec_dot_q4_0_q8_0_generic },
+            .{ "neon", ggml_vec_dot_q4_0_q8_0 },
+        }, @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+}
+
+fn fillQ4_0(xb: []T.block_q4_0, rand: std.Random) void {
+    for (xb) |*blk| {
+        blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
+        for (&blk.qs) |*v| v.* = rand.int(u8);
+    }
+}
+
+fn fillQ8_0(yb: []T.block_q8_0, rand: std.Random) void {
+    for (yb) |*blk| {
+        blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
+        for (&blk.qs) |*v| v.* = @as(i8, @intCast(@as(i32, rand.intRangeAtMost(u8, 0, 255)) - 128));
     }
 }

@@ -1,3 +1,22 @@
+pub const QK4_0 = 32;
+pub const QK8_0 = 32;
+
+pub const block_q4_0 = extern struct {
+    d: u16,
+    qs: [QK4_0 / 2]u8,
+};
+comptime {
+    if (@sizeOf(block_q4_0) != 18) @compileError("block_q4_0 layout mismatch");
+}
+
+pub const block_q8_0 = extern struct {
+    d: u16,
+    qs: [QK8_0]i8,
+};
+comptime {
+    if (@sizeOf(block_q8_0) != 34) @compileError("block_q8_0 layout mismatch");
+}
+
 pub const QK_K = 256;
 pub const K_SCALE_SIZE = 12;
 
@@ -20,24 +39,6 @@ comptime {
     if (@sizeOf(block_q8_K) != 292) @compileError("block_q8_K layout mismatch");
 }
 
-pub const block_q4_Kx8 = extern struct {
-    d: [8]u16,
-    dmin: [8]u16,
-    scales: [96]u8,
-    qs: [1024]u8,
-};
-comptime {
-    if (@sizeOf(block_q4_Kx8) != 1152) @compileError("block_q4_Kx8 layout mismatch");
-}
-
-pub const block_q8_Kx4 = extern struct {
-    d: [4]f32,
-    qs: [QK_K * 4]i8,
-    bsums: [QK_K / 4]i16,
-};
-comptime {
-    if (@sizeOf(block_q8_Kx4) != 1168) @compileError("block_q8_Kx4 layout mismatch");
-}
 
 pub inline fn f16f32(h: u16) f32 {
     return @floatCast(@as(f16, @bitCast(h)));
