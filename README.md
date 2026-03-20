@@ -1,4 +1,20 @@
-# llama.cpp
+# llama.cpp.zig
+
+This fork incrementally replaces C/C++ components with portable Zig, aiming for performance parity with hand-tuned architecture-specific code. Zig's `@Vector` types compile through LLVM to the same SIMD instructions (NEON, AVX2, etc.) without inline assembly or arch-specific intrinsics. Replacements are transparent to the rest of the codebase as it calls the Zig code directly.
+
+**Current replacements** (Qwen3.5-2B, Apple M4 Max, pp2048/tg128, zig/vanilla t/s):
+
+| Function | Quant | pp | tg | status |
+|---|---|---|---|---|
+| `vec_dot` | Q4_K | 614 / 644 | 130 / 136 | parity |
+| `vec_dot` | Q4_0 | 664 / 767 | 147 / 140 | parity |
+
+```
+cmake -DGGML_ZIG=ON ..    # enable zig components
+cd zig && zig build test -Doptimize=ReleaseFast 
+```
+
+---
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
