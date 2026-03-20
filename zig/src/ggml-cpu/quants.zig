@@ -68,6 +68,32 @@ pub export fn zig_vec_dot_q4_K_q8_K(
     s.* = sumf;
 }
 
+// We want to compute: s = dot(X, Y)
+// where X is a float vector of length n (the weights)
+// and   Y is a float vector of length n (the activations)
+//
+// But X and Y are not stored as floats. They are quantized:
+//   X is stored as n/32 blocks of block_q4_0
+//   Y is stored as n/32 blocks of block_q8_0
+//
+// Each block represents 32 consecutive floats from the original vector.
+// To recover the original float value:
+//   X[i*32 + j] = (raw_x[j] - 8) * d_x     where raw_x[j] is a 4-bit int (0..15)
+//   Y[i*32 + j] = raw_y[j] * d_y            where raw_y[j] is a signed 8-bit int
+//
+// d_x and d_y are per-block scale factors that control the precision
+// of that group of 32 values.
+//
+// Since d_x and d_y are constant within a group of 32, we can compute:
+//   dot(X, Y) = sum over all groups of:
+//       d_x * d_y * sum_j( (raw_x[j] - 8) * raw_y[j] )
+//
+// That inner sum is pure integer arithmetic.
+//
+// One more trick: instead of subtracting 8 from each raw_x[j], we expand:
+//   sum( (raw_x[j] - 8) * raw_y[j] ) = sum( raw_x[j] * raw_y[j] ) - 8 * sum( raw_y[j] )
+// This avoids 32 subtractions per group.
+
 pub export fn zig_vec_dot_q4_0_q8_0(
     n: c_int,
     s: *f32,
@@ -84,25 +110,39 @@ pub export fn zig_vec_dot_q4_0_q8_0(
     _ = nrc;
 
     const nb: usize = @intCast(@divExact(n, T.QK8_0));
-    const xp: [*]const T.block_q4_0 = @ptrCast(@alignCast(vx));
-    const yp: [*]const T.block_q8_0 = @ptrCast(@alignCast(vy));
+    const xp: [*]const T.block_q4_0 = @ptrCast(@alignCast(vx)); // quantized X
+    const yp: [*]const T.block_q8_0 = @ptrCast(@alignCast(vy)); // quantized Y
 
-    var sumf: f32 = 0;
+    var sum: f32 = 0;
 
     for (0..nb) |i| {
+        // Unpack the 16 packed bytes into 32 unsigned 4-bit weights.
+        // Each byte holds two weights: low 4 bits = index 0..15, high 4 bits = index 16..31.
         const raw: @Vector(16, u8) = xp[i].qs;
-        var aux: [32]u8 = undefined;
-        aux[0..16].* = @as([16]u8, raw & @as(@Vector(16, u8), @splat(0x0F)));
-        aux[16..32].* = @as([16]u8, raw >> @as(@Vector(16, u8), @splat(4)));
+        const lo: @Vector(16, u8) = raw & @as(@Vector(16, u8), @splat(0x0F));
+        const hi: @Vector(16, u8) = raw >> @as(@Vector(16, u8), @splat(4));
 
-        const q4: @Vector(32, i32) = @intCast(@as(@Vector(32, u8), aux));
-        const q8: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
-        const sumi = @reduce(.Add, q4 * q8) - 8 * @reduce(.Add, q8);
+        // Combine into one 32-wide vector and widen to i32 for arithmetic.
+        var raw_x_bytes: [32]u8 = undefined;
+        raw_x_bytes[0..16].* = @as([16]u8, lo);
+        raw_x_bytes[16..32].* = @as([16]u8, hi);
+        const raw_x: @Vector(32, i32) = @intCast(@as(@Vector(32, u8), raw_x_bytes));
 
-        sumf += @as(f32, @floatFromInt(sumi)) * T.f16f32(xp[i].d) * T.f16f32(yp[i].d);
+        // The 32 activation values, widened to i32.
+        const raw_y: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
+
+        // Integer dot product, with the zero-point subtraction factored out:
+        //   sum( (raw_x - 8) * raw_y ) = sum( raw_x * raw_y ) - 8 * sum( raw_y )
+        const int_dot = @reduce(.Add, raw_x * raw_y) - 8 * @reduce(.Add, raw_y);
+
+        // Scale by this group's d_x and d_y to get the float contribution.
+        const d_x: f32 = T.f16f32(xp[i].d);
+        const d_y: f32 = T.f16f32(yp[i].d);
+
+        sum += d_x * d_y * @as(f32, @floatFromInt(int_dot));
     }
 
-    s.* = sumf;
+    s.* = sum;
 }
 
 // ── Test infrastructure ──
