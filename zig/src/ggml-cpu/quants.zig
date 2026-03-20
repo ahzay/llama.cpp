@@ -49,19 +49,19 @@ pub export fn zig_vec_dot_q4_K_q8_K(
             sumi += @as(i32, yp[i].bsums[j]) * @as(i32, mins[j / 2]);
         }
 
-        var sumk: f32 = 0;
         var a_off: usize = 0;
         var q8_off: usize = 0;
+        var sumk: i32 = 0;
         for (0..T.QK_K / 32) |is| {
             const scale: i32 = @intCast(scales[is]);
             const av: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), aux8[a_off..][0..32].*));
             const qv: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), q8[q8_off..][0..32].*));
-            sumk += @as(f32, @floatFromInt(scale * @reduce(.Add, av * qv)));
+            sumk += scale * @reduce(.Add, av * qv);
             a_off += 32;
             q8_off += 32;
         }
 
-        sumf += T.f16f32(xp[i].d) * yp[i].d * sumk;
+        sumf += T.f16f32(xp[i].d) * yp[i].d * @as(f32, @floatFromInt(sumk));
         sumf -= T.f16f32(xp[i].dmin) * yp[i].d * @as(f32, @floatFromInt(sumi));
     }
 
