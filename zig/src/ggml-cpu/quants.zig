@@ -36,7 +36,7 @@ pub export fn zig_vec_dot_q2_K_q8_K(
         const dall: f32 = yp[i].d * T.f16f32(xp[i].d);
         const dmin: f32 = yp[i].d * T.f16f32(xp[i].dmin);
 
-        // Main dot: 2-bit quants × q8, with per-group 4-bit scales
+        // Inline unpack + dot — no aux8 array, minimize memory traffic.
         var isum: i32 = 0;
         var is: usize = 0;
         var q2_off: usize = 0;
@@ -45,24 +45,16 @@ pub export fn zig_vec_dot_q2_K_q8_K(
         for (0..T.QK_K / 128) |_| {
             inline for (0..4) |shift_idx| {
                 const shift: u3 = shift_idx * 2;
-                // First 16 elements
                 const d0: i32 = @intCast(sc[is] & 0xF);
-                is += 1;
+                const d1: i32 = @intCast(sc[is + 1] & 0xF);
+                is += 2;
                 const q2v0: @Vector(16, u8) = q2[q2_off..][0..16].*;
-                const bits0: @Vector(16, i8) = @bitCast((q2v0 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)));
-                const q8v0: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off..][0..16].*));
-                const av0: @Vector(16, i32) = @intCast(bits0);
-                isum += d0 * @reduce(.Add, av0 * q8v0);
-
-                // Second 16 elements
-                const d1: i32 = @intCast(sc[is] & 0xF);
-                is += 1;
                 const q2v1: @Vector(16, u8) = q2[q2_off + 16 ..][0..16].*;
-                const bits1: @Vector(16, i8) = @bitCast((q2v1 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)));
-                const q8v1: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off + 16 ..][0..16].*));
-                const av1: @Vector(16, i32) = @intCast(bits1);
-                isum += d1 * @reduce(.Add, av1 * q8v1);
-
+                const av0: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), @bitCast((q2v0 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)))));
+                const av1: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), @bitCast((q2v1 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)))));
+                const qv0: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off..][0..16].*));
+                const qv1: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off + 16 ..][0..16].*));
+                isum += d0 * @reduce(.Add, av0 * qv0) + d1 * @reduce(.Add, av1 * qv1);
                 q8_off += 32;
             }
             q2_off += 32;
