@@ -115,31 +115,29 @@ pub export fn zig_vec_dot_q4_0_q8_0(
 
     var sum: f32 = 0;
 
+    const cat_idx = comptime blk: {
+        var idx: [32]i32 = undefined;
+        for (0..16) |j| idx[j] = @intCast(j);
+        for (0..16) |j| idx[16 + j] = ~@as(i32, @intCast(j));
+        break :blk idx;
+    };
+
     for (0..nb) |i| {
-        // Unpack the 16 packed bytes into 32 unsigned 4-bit weights.
-        // Each byte holds two weights: low 4 bits = index 0..15, high 4 bits = index 16..31.
         const raw: @Vector(16, u8) = xp[i].qs;
-        const lo: @Vector(16, u8) = raw & @as(@Vector(16, u8), @splat(0x0F));
-        const hi: @Vector(16, u8) = raw >> @as(@Vector(16, u8), @splat(4));
+        // Pre-bias nibbles to signed: 0..15 → -8..+7 via wrapping add of 0xF8
+        // This lets us use signed×signed dot (sdot) and skip the bias subtraction entirely.
+        const bias: @Vector(16, u8) = @splat(0xF8);
+        const lo: @Vector(16, i8) = @bitCast((raw & @as(@Vector(16, u8), @splat(0x0F))) +% bias);
+        const hi: @Vector(16, i8) = @bitCast((raw >> @as(@Vector(16, u8), @splat(4))) +% bias);
 
-        // Combine into one 32-wide vector and widen to i32 for arithmetic.
-        var raw_x_bytes: [32]u8 = undefined;
-        raw_x_bytes[0..16].* = @as([16]u8, lo);
-        raw_x_bytes[16..32].* = @as([16]u8, hi);
-        const raw_x: @Vector(32, i32) = @intCast(@as(@Vector(32, u8), raw_x_bytes));
+        // Concat lo/hi into 32-wide signed vector, widen to i32 for dot product.
+        const q4: @Vector(32, i32) = @intCast(@shuffle(i8, lo, hi, cat_idx));
+        const q8: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
 
-        // The 32 activation values, widened to i32.
-        const raw_y: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
+        // Single signed dot product — no bias subtraction needed.
+        const int_dot = @reduce(.Add, q4 * q8);
 
-        // Integer dot product, with the zero-point subtraction factored out:
-        //   sum( (raw_x - 8) * raw_y ) = sum( raw_x * raw_y ) - 8 * sum( raw_y )
-        const int_dot = @reduce(.Add, raw_x * raw_y) - 8 * @reduce(.Add, raw_y);
-
-        // Scale by this group's d_x and d_y to get the float contribution.
-        const d_x: f32 = T.f16f32(xp[i].d);
-        const d_y: f32 = T.f16f32(yp[i].d);
-
-        sum += d_x * d_y * @as(f32, @floatFromInt(int_dot));
+        sum += T.f16f32(xp[i].d) * T.f16f32(yp[i].d) * @as(f32, @floatFromInt(int_dot));
     }
 
     s.* = sum;

@@ -8,8 +8,8 @@ Each Zig function replaces ~7 architecture-specific C implementations (ARM NEON,
 
 | Function | Quant | pp | tg | Platform |
 |---|---|---|---|---|
-| `vec_dot` | Q4_K | 614 / 644 | 130 / 136 | Apple M4 Max |
-| `vec_dot` | Q4_0 | 664 / 767 | 147 / 140 | Apple M4 Max |
+| `vec_dot` | Q4_K | 626 / 644 | 135 / 136 | Apple M4 Max |
+| `vec_dot` | Q4_0 | 775 / 767 | 146 / 140 | Apple M4 Max |
 | `vec_dot` | Q4_K | 246 / 246 | 12.6 / 12.6 | AMD 5900X (AVX2) |
 
 ```
