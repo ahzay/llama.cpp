@@ -207,6 +207,7 @@ typedef pthread_t ggml_thread_t;
 #ifdef GGML_USE_ZIG
 extern void zig_vec_dot_q4_K_q8_K(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
 extern void zig_vec_dot_q4_0_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
+extern void zig_vec_dot_q8_0_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
 #endif
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
@@ -260,7 +261,11 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_Q8_0] = {
         .from_float               = quantize_row_q8_0,
+#ifdef GGML_USE_ZIG
+        .vec_dot                  = zig_vec_dot_q8_0_q8_0,
+#else
         .vec_dot                  = ggml_vec_dot_q8_0_q8_0,
+#endif
         .vec_dot_type             = GGML_TYPE_Q8_0,
 #if defined (__ARM_FEATURE_MATMUL_INT8)
         .nrows                    = 2,

@@ -143,6 +143,37 @@ pub export fn zig_vec_dot_q4_0_q8_0(
     s.* = sum;
 }
 
+pub export fn zig_vec_dot_q8_0_q8_0(
+    n: c_int,
+    s: *f32,
+    bs: usize,
+    vx: *const anyopaque,
+    bx: usize,
+    vy: *const anyopaque,
+    by: usize,
+    nrc: c_int,
+) void {
+    _ = bs;
+    _ = bx;
+    _ = by;
+    _ = nrc;
+
+    const nb: usize = @intCast(@divExact(n, T.QK8_0));
+    const xp: [*]const T.block_q8_0 = @ptrCast(@alignCast(vx));
+    const yp: [*]const T.block_q8_0 = @ptrCast(@alignCast(vy));
+
+    var sum: f32 = 0;
+
+    for (0..nb) |i| {
+        const qx: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), xp[i].qs));
+        const qy: @Vector(32, i32) = @intCast(@as(@Vector(32, i8), yp[i].qs));
+        const int_dot = @reduce(.Add, qx * qy);
+        sum += T.f16f32(xp[i].d) * T.f16f32(yp[i].d) * @as(f32, @floatFromInt(int_dot));
+    }
+
+    s.* = sum;
+}
+
 // ── Test infrastructure ──
 
 const VecDotFn = *const fn (c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) callconv(.c) void;
@@ -296,5 +327,42 @@ fn fillQ8_0(yb: []T.block_q8_0, rand: std.Random) void {
     for (yb) |*blk| {
         blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
         for (&blk.qs) |*v| v.* = @as(i8, @intCast(@as(i32, rand.intRangeAtMost(u8, 0, 255)) - 128));
+    }
+}
+
+// ── Q8_0 tests ──
+
+extern fn ggml_vec_dot_q8_0_q8_0(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+extern fn ggml_vec_dot_q8_0_q8_0_generic(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+
+test "q8_0 vec_dot" {
+    ggml_cpu_init();
+    var prng = std.Random.DefaultPrng.init(0xBEEF_F00D);
+    const rand = prng.random();
+    const a = std.heap.page_allocator;
+
+    for ([_]usize{ 1, 4, 16, 64, 256 }) |nb| {
+        const x = try a.alloc(T.block_q8_0, nb);
+        const y = try a.alloc(T.block_q8_0, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ8_0(x, rand);
+        fillQ8_0(y, rand);
+        try checkParity(zig_vec_dot_q8_0_q8_0, ggml_vec_dot_q8_0_q8_0_generic, @intCast(nb * T.QK8_0), @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+
+    std.debug.print("\nq8_0:        {s:>10} {s:>10} {s:>10}\n", .{ "zig", "generic", "neon" });
+    for ([_]usize{ 16, 64, 256, 1024 }) |nb| {
+        const x = try a.alloc(T.block_q8_0, nb);
+        const y = try a.alloc(T.block_q8_0, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ8_0(x, rand);
+        fillQ8_0(y, rand);
+        printBench("", nb * T.QK8_0, .{
+            .{ "zig", zig_vec_dot_q8_0_q8_0 },
+            .{ "generic", ggml_vec_dot_q8_0_q8_0_generic },
+            .{ "neon", ggml_vec_dot_q8_0_q8_0 },
+        }, @ptrCast(x.ptr), @ptrCast(y.ptr));
     }
 }
