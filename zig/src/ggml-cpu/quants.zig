@@ -1,6 +1,79 @@
 const std = @import("std");
 const T = @import("ggml-common");
 
+pub export fn zig_vec_dot_q2_K_q8_K(
+    n: c_int,
+    s: *f32,
+    bs: usize,
+    vx: *const anyopaque,
+    bx: usize,
+    vy: *const anyopaque,
+    by: usize,
+    nrc: c_int,
+) void {
+    _ = bs;
+    _ = bx;
+    _ = by;
+    _ = nrc;
+
+    const nb: usize = @intCast(@divExact(n, T.QK_K));
+    const xp: [*]const T.block_q2_K = @ptrCast(@alignCast(vx));
+    const yp: [*]const T.block_q8_K = @ptrCast(@alignCast(vy));
+
+    var sumf: f32 = 0;
+
+    for (0..nb) |i| {
+        const q2 = &xp[i].qs;
+        const q8 = &yp[i].qs;
+        const sc = &xp[i].scales;
+
+        // mins × bsums
+        var summs: i32 = 0;
+        inline for (0..16) |j| {
+            summs += @as(i32, yp[i].bsums[j]) * @as(i32, sc[j] >> 4);
+        }
+
+        const dall: f32 = yp[i].d * T.f16f32(xp[i].d);
+        const dmin: f32 = yp[i].d * T.f16f32(xp[i].dmin);
+
+        // Main dot: 2-bit quants × q8, with per-group 4-bit scales
+        var isum: i32 = 0;
+        var is: usize = 0;
+        var q2_off: usize = 0;
+        var q8_off: usize = 0;
+
+        for (0..T.QK_K / 128) |_| {
+            inline for (0..4) |shift_idx| {
+                const shift: u3 = shift_idx * 2;
+                // First 16 elements
+                const d0: i32 = @intCast(sc[is] & 0xF);
+                is += 1;
+                const q2v0: @Vector(16, u8) = q2[q2_off..][0..16].*;
+                const bits0: @Vector(16, i8) = @bitCast((q2v0 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)));
+                const q8v0: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off..][0..16].*));
+                const av0: @Vector(16, i32) = @intCast(bits0);
+                isum += d0 * @reduce(.Add, av0 * q8v0);
+
+                // Second 16 elements
+                const d1: i32 = @intCast(sc[is] & 0xF);
+                is += 1;
+                const q2v1: @Vector(16, u8) = q2[q2_off + 16 ..][0..16].*;
+                const bits1: @Vector(16, i8) = @bitCast((q2v1 >> @as(@Vector(16, u3), @splat(shift))) & @as(@Vector(16, u8), @splat(3)));
+                const q8v1: @Vector(16, i32) = @intCast(@as(@Vector(16, i8), q8[q8_off + 16 ..][0..16].*));
+                const av1: @Vector(16, i32) = @intCast(bits1);
+                isum += d1 * @reduce(.Add, av1 * q8v1);
+
+                q8_off += 32;
+            }
+            q2_off += 32;
+        }
+
+        sumf += dall * @as(f32, @floatFromInt(isum)) - dmin * @as(f32, @floatFromInt(summs));
+    }
+
+    s.* = sumf;
+}
+
 pub export fn zig_vec_dot_q4_K_q8_K(
     n: c_int,
     s: *f32,
@@ -224,6 +297,52 @@ fn printBench(label: []const u8, n: usize, comptime fns: anytype, vx: *const any
 }
 
 extern fn ggml_cpu_init() void;
+
+// ── Q2_K tests ──
+
+extern fn ggml_vec_dot_q2_K_q8_K(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+extern fn ggml_vec_dot_q2_K_q8_K_generic(c_int, *f32, usize, *const anyopaque, usize, *const anyopaque, usize, c_int) void;
+
+test "q2_K vec_dot" {
+    ggml_cpu_init();
+    var prng = std.Random.DefaultPrng.init(0xFACE_FEED);
+    const rand = prng.random();
+    const a = std.heap.page_allocator;
+
+    for ([_]usize{ 1, 4, 16, 64, 256 }) |nb| {
+        const x = try a.alloc(T.block_q2_K, nb);
+        const y = try a.alloc(T.block_q8_K, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ2K(x, rand);
+        fillQ8K(y, rand);
+        try checkParity(zig_vec_dot_q2_K_q8_K, ggml_vec_dot_q2_K_q8_K_generic, @intCast(nb * T.QK_K), @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+
+    std.debug.print("\nq2_K:        {s:>10} {s:>10} {s:>10}\n", .{ "zig", "generic", "neon" });
+    for ([_]usize{ 16, 64, 256, 1024 }) |nb| {
+        const x = try a.alloc(T.block_q2_K, nb);
+        const y = try a.alloc(T.block_q8_K, nb);
+        defer a.free(x);
+        defer a.free(y);
+        fillQ2K(x, rand);
+        fillQ8K(y, rand);
+        printBench("", nb * T.QK_K, .{
+            .{ "zig", zig_vec_dot_q2_K_q8_K },
+            .{ "generic", ggml_vec_dot_q2_K_q8_K_generic },
+            .{ "neon", ggml_vec_dot_q2_K_q8_K },
+        }, @ptrCast(x.ptr), @ptrCast(y.ptr));
+    }
+}
+
+fn fillQ2K(xb: []T.block_q2_K, rand: std.Random) void {
+    for (xb) |*blk| {
+        blk.d = @bitCast(@as(f16, @floatCast((rand.float(f32) - 0.5) * 2.0)));
+        blk.dmin = @bitCast(@as(f16, @floatCast(rand.float(f32) * 0.5)));
+        for (&blk.scales) |*v| v.* = rand.int(u8);
+        for (&blk.qs) |*v| v.* = rand.int(u8);
+    }
+}
 
 // ── Q4_K tests ──
 

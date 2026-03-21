@@ -14,6 +14,7 @@ Each Zig function replaces ~7 architecture-specific C implementations (ARM NEON,
 | `vec_dot` | Q4_0 | 273 / 271 | 13.3 / 13.2 | AMD 5900X (AVX2) |
 | `vec_dot` | Q8_0 | 755 / 756 | 107 / 105 | Apple M4 Max |
 | `vec_dot` | Q8_0 | 224 / 237 | 8.43 / 8.46 | AMD 5900X (AVX2) |
+| `vec_dot` | Q2_K | 501 / 499 | 111 / 105 | Apple M4 Max |
 
 ```
 cmake -DGGML_ZIG=ON ..    # enable zig components

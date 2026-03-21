@@ -20,6 +20,16 @@ comptime {
 pub const QK_K = 256;
 pub const K_SCALE_SIZE = 12;
 
+pub const block_q2_K = extern struct {
+    scales: [QK_K / 16]u8,
+    qs: [QK_K / 4]u8,
+    d: u16,
+    dmin: u16,
+};
+comptime {
+    if (@sizeOf(block_q2_K) != 2 * 2 + QK_K / 16 + QK_K / 4) @compileError("block_q2_K layout mismatch");
+}
+
 pub const block_q4_K = extern struct {
     d: u16,
     dmin: u16,
